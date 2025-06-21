@@ -1,4 +1,9 @@
-public delegate int SubcommandHandler(string prg, string[] args, VolumeProxy proxy);
+public errordomain SubcommandError {
+  INVALID_INPUT,
+  FAILED,
+}
+
+public delegate void SubcommandHandler(string[] args, VolumeProxy proxy) throws SubcommandError;
 
 public struct Subcommand {
   public string name;
@@ -19,17 +24,15 @@ public class VolkClient : Object {
   private const Subcommand[] subcommands = {
     {
       "set", "[+/-]VOL[%]", "Set audio volume",
-
       "Set the volume based on the specified argument.\n" +
       "  VOL - Set volume as the specified floating point value (Example: 0.5)\n" +
       "  VOL% - Set volume as the specified percentage (Example: 50%)\n" +
-      "  [+/-]VOL - Step up/down volume by specified value (Example: +0.05)" +
-      "  [+/-]VOL% - Step up/down volume by specified percent (Example: -5%)\n",
-
+      "  [+/-]VOL - Step up/down volume by specified value (Example: +0.05)\n" +
+      "  [+/-]VOL% - Step up/down volume by specified percent (Example: -5%)",
       handle_set,
     },
     {
-      "mute", "false|0|true|1|toggle", "Mute/Unmute audio",
+      "mute", "0|false|1|true|t|toggle", "Mute/Unmute audio",
       null,
       handle_mute,
     },
@@ -61,36 +64,54 @@ public class VolkClient : Object {
   }
 
   public static int main(string[] args) {
+    var prg = Path.get_basename(args[0]);
     var context = new OptionContext("COMMAND [ARGS] - Manipulate volk service");
 
     context.add_main_entries(entries, null);
     context.set_summary(build_top_summary());
+    context.set_description(@"Use '$prg help COMMAND' for more information about a command");
     context.set_strict_posix(true);
 
     try {
       context.parse(ref args);
     } catch (OptionError error) {
-      stderr.printf("Failed to parse options: %s\n", error.message);
+      stderr.printf("%s: failed to parse options: %s\n", prg, error.message);
+      stderr.printf("Run '%s help'\n", prg);
       return Posix.EXIT_FAILURE;
     }
 
     if (args.length < 2) {
       var help = context.get_help(false, null);
-      stdout.printf("%s", help);
+      stderr.printf("%s", help);
       return Posix.EXIT_FAILURE;
+    }
+
+    var cmd_name = args[1];
+    if (cmd_name == "help") {
+      var help = context.get_help(false, null);
+      try {
+        show_help(prg, args[2:], help);
+        return 0;
+      } catch (Error error) {
+        stderr.printf("%s: %s\n", prg, error.message);
+        if (error is SubcommandError.INVALID_INPUT) {
+          stderr.printf("Run '%s help'\n", prg);
+        }
+        return Posix.EXIT_FAILURE;
+      }
     }
 
     Subcommand* cmd = null;
     for (int i = 0; i < subcommands.length; i++) {
       var subcommand = &subcommands[i];
-      if (subcommand.name == args[1]) {
+      if (subcommand.name == cmd_name) {
         cmd = subcommand;
         break;
       }
     }
     if (cmd == null) {
-      var help = context.get_help(false, null);
-      stdout.printf("%s", help);
+      stderr.printf("%s: unknown command %s\n", prg, Shell.quote(cmd_name));
+      stderr.printf("Run '%s help'\n", prg);
       return Posix.EXIT_FAILURE;
     }
 
@@ -109,29 +130,64 @@ public class VolkClient : Object {
         "/com/github/infastin/volk"
       );
     } catch (IOError error) {
-      stderr.printf("Failed to connect to DBus service: %s\n", error.message);
+      stderr.printf("%s: failed to connect to DBus service: %s\n", prg, error.message);
       return Posix.EXIT_FAILURE;
     }
 
-    var prg = Path.get_basename(args[0]);
-    return cmd.handler(prg, args[2:], proxy);
+    try {
+      cmd.handler(args[2:], proxy);
+    } catch (Error error) {
+      stderr.printf("%s: %s\n", prg, error.message);
+      if (error is SubcommandError.INVALID_INPUT) {
+        stderr.printf("Run '%s help %s'\n", prg, cmd_name);
+      }
+      return Posix.EXIT_FAILURE;
+    }
+
+    return 0;
   }
 
-  private static int handle_set(string prg, string[] args, VolumeProxy proxy) {
+  private static void show_help(string prg, string[] args, string help) throws SubcommandError {
     if (args.length == 0) {
-      stderr.printf("%s: expected an argument\n", prg);
-      return Posix.EXIT_FAILURE;
+      stdout.printf("%s", help);
+      return;
+    }
+    if (args.length > 1) {
+      throw new SubcommandError.INVALID_INPUT("too many arguments");
     }
 
+    var cmd_name = args[0];
+
+    Subcommand* cmd = null;
+    for (int i = 0; i < subcommands.length; i++) {
+      var subcommand = &subcommands[i];
+      if (subcommand.name == cmd_name) {
+        cmd = subcommand;
+        break;
+      }
+    }
+    if (cmd == null) {
+      throw new SubcommandError.INVALID_INPUT("command %s not found", Shell.quote(cmd_name));
+    }
+
+    stdout.printf("Usage:\n  %s %s %s - %s\n",
+      prg, cmd_name, cmd.positional_args, cmd.summary);
+    if (cmd.description != null) {
+      stdout.printf("\n%s\n", cmd.description);
+    }
+  }
+
+  private static void handle_set(string[] args, VolumeProxy proxy) throws SubcommandError {
+    if (args.length == 0) {
+      throw new SubcommandError.INVALID_INPUT("expected an argument");
+    }
     if (args.length > 1) {
-      stderr.printf("%s: too many arguments\n", prg);
-      return Posix.EXIT_FAILURE;
+      throw new SubcommandError.INVALID_INPUT("too many arguments");
     }
 
     var arg = args[0];
     if (arg.length == 0) {
-      stderr.printf("%s: invalid argument\n", prg);
-      return Posix.EXIT_FAILURE;
+      throw new SubcommandError.INVALID_INPUT("invalid argument");
     }
 
     bool inc = false;
@@ -147,17 +203,15 @@ public class VolkClient : Object {
 
     double val = 0;
     if (arg[arg.length-1] == '%') {
-      var num = arg[:arg.length-1];
+      arg = arg[:arg.length-1];
       uint perc = 0;
-      if (!uint.try_parse(num, out perc, null, 10)) {
-        stderr.printf("%s: expected a number, got: %s\n", prg, Shell.quote(num));
-        return Posix.EXIT_FAILURE;
+      if (!uint.try_parse(arg, out perc, null, 10)) {
+        throw new SubcommandError.INVALID_INPUT("expected a number, got: %s\n", Shell.quote(arg));
       }
       val = ((double) perc) / 100.0;
     } else {
       if (!double.try_parse(arg, out val, null)) {
-        stderr.printf("%s: expected a number, got: %s\n", prg, Shell.quote(arg));
-        return Posix.EXIT_FAILURE;
+        throw new SubcommandError.INVALID_INPUT("expected a number, got: %s\n", Shell.quote(arg));
       }
     }
     val = val.clamp(0, 1.5);
@@ -171,39 +225,31 @@ public class VolkClient : Object {
         proxy.volume = val;
       }
     } catch (Error error) {
-      stderr.printf("%s: failed to change volume: %s\n", prg, error.message);
-      return Posix.EXIT_FAILURE;
+      throw new SubcommandError.FAILED("failed to change volume: %s\n", error.message);
     }
-
-    return 0;
   }
 
-  private static int handle_mute(string prg, string[] args, VolumeProxy proxy) {
+  private static void handle_mute(string[] args, VolumeProxy proxy) throws SubcommandError {
     if (args.length == 0) {
-      stderr.printf("%s: expected an argument\n", prg);
-      return Posix.EXIT_FAILURE;
+      throw new SubcommandError.INVALID_INPUT("expected an argument");
     }
-
     if (args.length > 1) {
-      stderr.printf("%s: too many arguments\n", prg);
-      return Posix.EXIT_FAILURE;
+      throw new SubcommandError.INVALID_INPUT("too many arguments");
     }
 
-    switch (args[0]) {
+    var arg = args[0];
+    switch (arg) {
     case "0": case "false":
       proxy.muted = false;
       break;
     case "1": case "true":
       proxy.muted = true;
       break;
-    case "toggle":
+    case "t": case "toggle":
       proxy.muted = !proxy.muted;
       break;
     default:
-      stderr.printf("%s: invalid argument: %s\n", prg, args[0]);
-      return Posix.EXIT_FAILURE;
+      throw new SubcommandError.INVALID_INPUT("invalid argument: %s", arg);
     }
-
-    return 0;
   }
 }

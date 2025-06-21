@@ -19,11 +19,13 @@
             meson
             pkg-config
             ninja
+            wrapGAppsHook3
+          ];
+          buildInputs = with pkgs; [
             glib
             gtk3
             libnotify
             wireplumber
-            wrapGAppsHook3
           ];
         };
       });

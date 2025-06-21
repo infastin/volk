@@ -1,0 +1,11 @@
+gio = dependency('gio-2.0')
+glib = dependency('glib-2.0')
+gobject = dependency('gobject-2.0')
+gtk3 = dependency('gtk+-3.0')
+libnotify = dependency('libnotify')
+wireplumber = dependency('wireplumber-0.5')
+vala_posix = valac.find_library('posix')
+libm = cc.find_library('m')
+
+subdir('service')
+subdir('client')

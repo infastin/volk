@@ -1,0 +1,13 @@
+Conf
+	.new_open name="open_new"
+
+Properties
+	.new_copy name="copy_new"
+
+SessionItem
+	.get_associated_proxy#virtual_method name="get_associated_proxy_fn" no_wrapper
+
+Transition abstract=false
+	.get_source_object name="get_unowned_source_object" nullable
+
+SiFactory abstract=false

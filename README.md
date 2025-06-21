@@ -11,7 +11,7 @@ should show volume bar in notifications.
 
 This application uses PipeWire and WirePlumber, so it is
 possible to change the audio sink/source state with `wpctl`.
-It is also possible to do this with `volkctl`.
+It is also possible to do so with `volkctl`.
 
 ## Building
 
